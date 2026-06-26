@@ -353,10 +353,31 @@ function buildTokenizerWithDicPath(dicPath) {
       reject(new Error("kuromoji本体が読み込まれていません"));
       return;
     }
-    kuromoji.builder({ dicPath }).build((err, tokenizer) => {
-      if (err) { reject(err); return; }
-      resolve(tokenizer);
-    });
+    try {
+      kuromoji.builder({ dicPath }).build((err, tokenizer) => {
+        if (err) { reject(err); return; }
+        resolve(tokenizer);
+      });
+    } catch (syncErr) {
+      // dicPath不正やzlib展開失敗などで build() 呼び出し自体が
+      // 同期的に例外を投げるケースに対応 (コールバックが永遠に呼ばれないのを防ぐ)
+      reject(syncErr);
+    }
+  });
+}
+
+// 辞書ビルドが何らかの理由 (CORS、ネットワーク不調、gzip展開失敗など) で
+// コールバックを一切呼ばずに固まってしまうケースがあるため、
+// 一定時間で強制的にタイムアウトさせ、次のCDNへ切り替えられるようにする。
+function withTimeout(promise, ms, label) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`タイムアウト (${label}): ${ms}ms以内に応答がありませんでした`));
+    }, ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); }
+    );
   });
 }
 
@@ -369,13 +390,16 @@ async function ensureTokenizer() {
     for (const cdn of KUROMOJI_CDNS) {
       try {
         els.statusText.textContent = `辞書を読み込み中... (${cdn.label})`;
-        await loadScriptOnce(cdn.scriptUrl);
-        const tokenizer = await buildTokenizerWithDicPath(cdn.dicPath);
+        await withTimeout(loadScriptOnce(cdn.scriptUrl), 8000, `${cdn.label} スクリプト`);
+        const tokenizer = await withTimeout(
+          buildTokenizerWithDicPath(cdn.dicPath), 20000, `${cdn.label} 辞書ビルド`
+        );
         state.tokenizer = tokenizer;
         return tokenizer;
       } catch (e) {
         console.warn(`kuromoji CDN失敗 (${cdn.label}):`, e);
         lastErr = e;
+        els.statusText.textContent = `${cdn.label} で失敗。次のCDNを試します...`;
         // 失敗したスクリプトタグは次回再試行時に再ロードできるよう削除する
         document.querySelectorAll(`script[data-kuromoji-src="${cdn.scriptUrl}"]`)
           .forEach((s) => s.remove());
