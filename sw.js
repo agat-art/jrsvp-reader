@@ -6,7 +6,7 @@
 // CACHE_NAME は app.js / index.html を更新するたびにバージョン番号を
 // 上げること (古いキャッシュが優先されて更新が反映されない事故を防ぐため)。
 
-const CACHE_NAME = "jrsvp-shell-v2";
+const CACHE_NAME = "jrsvp-shell-v3";
 const SHELL_FILES = [
   "./",
   "./index.html",
